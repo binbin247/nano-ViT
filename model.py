@@ -6,12 +6,16 @@ import torch.nn.functional as F
 
 @dataclass
 class ViTConfig:
+    image_size: tuple[int, int]  # height, width
+    in_channels: int
     ebd_dim: int
     n_head: int
     head_dim: int
     patch_size: int
     n_layer: int
     ffn_dim: int
+    cls_num: int
+    dropout_img_ebd: float = 0.0
     dropout_att_weight: float = 0.0
     dropout_att_out: float = 0.0
     dropout_ffn_out: float = 0.0
@@ -20,43 +24,38 @@ class ViTConfig:
 class ImageEmbed(nn.Module):
     """Embed image patches, add positional embeddings, and prepend a CLS token.
 
-    Input: (batch_size, n_channels, width, height).
+    Input: (batch_size, n_channels, height, width).
     Output: (batch_size, seq_length + 1, ebd_dim).
     """
 
-    def __init__(
-        self,
-        image_size: tuple[int, int, int], # n_channels, width, height
-        cfg: ViTConfig,
-        dropout: float = 0.0,
-    ):
+    def __init__(self, cfg: ViTConfig):
         super().__init__()
+        height, width = cfg.image_size
         self.conv = nn.Conv2d(  # Project image patches into the embedding space.
-            in_channels = image_size[0],
+            in_channels = cfg.in_channels,
             out_channels = cfg.ebd_dim,
             kernel_size = (cfg.patch_size, cfg.patch_size),
             stride = (cfg.patch_size, cfg.patch_size),
             bias = True,
         )
 
-        assert image_size[1] % cfg.patch_size == 0 and image_size[2] % cfg.patch_size == 0 
-        seq_length = (image_size[1] // cfg.patch_size) * (image_size[2] // cfg.patch_size)
+        assert height % cfg.patch_size == 0 and width % cfg.patch_size == 0
+        seq_length = (height // cfg.patch_size) * (width // cfg.patch_size)
 
         self.pos_ebd = nn.Parameter(
-            torch.zeros(1, seq_length, cfg.ebd_dim),
+            torch.zeros(1, seq_length+1, cfg.ebd_dim),
             requires_grad=True
         )
-
         self.cls_token = nn.Parameter(torch.zeros(1,1,cfg.ebd_dim), requires_grad = True)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(cfg.dropout_img_ebd)
 
 
     def forward(self, x: Tensor)-> Tensor:
-        x = self.conv(x)                                                     # (B, ebd_dim, width//patch_size, height//patch_size)
+        x = self.conv(x)                                                     # (B, ebd_dim, height//patch_size, width//patch_size)
         x = x.reshape(x.size(0), x.size(1), -1)                              # (B, ebd_dim, seq_length)
         x = x.transpose(-1, -2)                                              # (B, seq_length, ebd_dim)
-        x += self.pos_ebd
         x = torch.cat((self.cls_token.expand(x.size(0), -1, -1), x), dim=1)  # (B, seq_length + 1, ebd_dim)
+        x += self.pos_ebd
         return self.dropout(x)
 
     
@@ -77,7 +76,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.output_proj = nn.Linear(cfg.n_head * cfg.head_dim, cfg.ebd_dim, bias = True)
         self.dropout = nn.Dropout(cfg.dropout_att_out)
 
-    def forward(self, x: Tensor):    # x.shape = (B = batch_size, T = seq_length + 1, C = ebd_dim)
+    def forward(self, x: Tensor) -> Tensor:    # x.shape = (B = batch_size, T = seq_length + 1, C = ebd_dim)
         assert x.dim() == 3
         B, T, D = x.shape
         q = self.Wq(x).reshape(B, T, self.cfg.n_head, self.cfg.head_dim).transpose(1,2)  # (B, n_head, T, head_dim)
@@ -93,8 +92,10 @@ class MultiHeadSelfAttention(nn.Module):
         return self.dropout(out)
     
 class FFN(nn.Module):
-    """
-    # TODO: add comment.
+    """Apply SwiGLU independently to each token, then apply output dropout.
+
+    Input: (batch_size, seq_length + 1, ebd_dim).
+    Output: (batch_size, seq_length + 1, ebd_dim).
     """
 
     def __init__(self, cfg: ViTConfig):
@@ -107,3 +108,79 @@ class FFN(nn.Module):
 
     def forward(self, x: Tensor):    # x.shape = (B = batch_size, T = seq_length+1, C = ebd_dim)
         return self.dropout_out(self.w3(F.silu(self.w1(x)) * self.w2(x)))
+
+class TransformerBlock(nn.Module):
+    """Apply a pre-norm Transformer block with self-attention and SwiGLU.
+
+    Input: (batch_size, seq_length + 1, ebd_dim).
+    Output: (batch_size, seq_length + 1, ebd_dim).
+    """
+
+    def __init__(self, cfg: ViTConfig):
+        super().__init__()
+        self.ln_mha = nn.LayerNorm(cfg.ebd_dim, eps = 1e-5)
+        self.mha = MultiHeadSelfAttention(cfg)
+        self.ln_ffn = nn.LayerNorm(cfg.ebd_dim, eps = 1e-5)
+        self.ffn = FFN(cfg)
+
+    def forward(self, x: Tensor) -> Tensor:  # x.shape = (B, T, C)
+        """
+        Pre-norm transformer block.
+        """
+        x = self.mha(self.ln_mha(x)) + x
+        x = self.ffn(self.ln_ffn(x)) + x
+        return x
+
+class ClassifierHead(nn.Module):
+    """Project the CLS token representation to class logits.
+
+    Input: (batch_size, seq_length + 1, ebd_dim).
+    Output: (batch_size, cls_num).
+    """
+    def __init__(self, cfg: ViTConfig):
+        super().__init__()
+        self.out_proj = nn.Linear(cfg.ebd_dim, cfg.cls_num)
+
+    def forward(self, x: Tensor) -> Tensor: # (batch_size, seq_length + 1, ebd_dim)
+        x = x[:, 0, :]  # get cls token (batch_size, ebd_dim)
+        return self.out_proj(x) # (batch_size, cls_num)
+
+
+
+class ViT(nn.Module):
+    """Classify images with patch embedding, Transformer blocks, and a CLS head.
+
+    Input: (batch_size, n_channels, height, width).
+    Output: class logits with shape (batch_size, cls_num).
+    """
+    def __init__(self, cfg: ViTConfig):
+        super().__init__()
+        self.img_ebd = ImageEmbed(cfg)
+        self.encoder = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layer)])
+        self.ln_cls_head = nn.LayerNorm(cfg.ebd_dim)
+        self.cls_head = ClassifierHead(cfg)
+
+        # initialize all the weights
+        self.apply(self._init_weights)
+
+    def forward(self, x:Tensor) -> Tensor:  # x input batched images (batch_size, n_channels, height, width)
+        x = self.img_ebd(x)
+        for block in self.encoder:
+            x = block(x)
+        logits = self.cls_head(self.ln_cls_head(x))
+        return logits
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
+            nn.init.trunc_normal_(module.weight, mean = 0, std = 0.02)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, ImageEmbed):
+            nn.init.trunc_normal_(module.pos_ebd, mean=0, std=0.02)
+            nn.init.trunc_normal_(module.cls_token, mean=0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.constant_(module.weight, 1)
+            nn.init.constant_(module.bias, 0)
+
+    def get_num_params(self) -> int:
+        return sum(p.numel() for p in self.parameters())

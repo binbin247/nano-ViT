@@ -24,11 +24,14 @@ class TestImageEmbed(DeviceTestCase):
         cls.ViTConfig = ViTConfig
 
     def make_embed(self, image_size=(3, 8, 12), patch_size=4, ebd_dim=4, dropout=0.0):
+        in_channels, height, width = image_size
         cfg = self.ViTConfig(
+            image_size=(height, width), in_channels=in_channels,
             ebd_dim=ebd_dim, n_head=2, head_dim=ebd_dim // 2,
-            patch_size=patch_size, n_layer=1, n_ffn=16
+            patch_size=patch_size, n_layer=1, ffn_dim=16, cls_num=3,
+            dropout_img_ebd=dropout,
         )
-        return self.ImageEmbed(image_size, cfg, dropout=dropout)
+        return self.ImageEmbed(cfg)
 
     def test_output_shape(self):
         for batch_size, image_size in ((1, (3, 8, 8)), (3, (3, 8, 12)), (2, (1, 12, 8))):
@@ -72,7 +75,7 @@ class TestImageEmbed(DeviceTestCase):
         with torch.no_grad():
             embed.conv.weight.zero_()
             embed.conv.bias.zero_()
-            embed.pos_ebd.copy_(expected_positions.unsqueeze(0))
+            embed.pos_ebd[:, 1:].copy_(expected_positions.unsqueeze(0))
         output = embed(torch.ones(2, 3, 8, 12))
         for image in output:
             torch.testing.assert_close(image[1:], expected_positions)
@@ -93,7 +96,10 @@ class TestImageEmbed(DeviceTestCase):
 
         # Both images contribute to the same learnable CLS parameter.
         torch.testing.assert_close(
-            embed.cls_token.grad, 2 * x.size(0) * embed.cls_token.detach()
+            embed.cls_token.grad,
+            2 * x.size(0) * (
+                embed.cls_token.detach() + embed.pos_ebd[:, :1].detach()
+            ),
         )
 
     def test_rejects_image_dimensions_not_divisible_by_patch_size(self):
@@ -120,7 +126,9 @@ class TestImageEmbed(DeviceTestCase):
     def test_dropout_is_disabled_during_evaluation(self):
         embed = self.make_dropout_embed().eval()
         output = embed(torch.ones(2, 3, 8, 12))
-        torch.testing.assert_close(output, torch.ones(2, 7, 4))
+        expected = torch.ones(2, 7, 4)
+        expected[:, 0] = 2.0
+        torch.testing.assert_close(output, expected)
 
 
 class TestMultiHeadSelfAttention(DeviceTestCase):
@@ -137,8 +145,9 @@ class TestMultiHeadSelfAttention(DeviceTestCase):
         dropout_att_weight=0.0, dropout_att_out=0.0,
     ):
         cfg = self.ViTConfig(
+            image_size=(8, 8), in_channels=3,
             ebd_dim=ebd_dim, n_head=n_head, head_dim=head_dim,
-            patch_size=4, n_layer=1, n_ffn=16,
+            patch_size=4, n_layer=1, ffn_dim=16, cls_num=3,
             dropout_att_weight=dropout_att_weight,
             dropout_att_out=dropout_att_out,
         )
@@ -261,7 +270,17 @@ class TestMultiHeadSelfAttention(DeviceTestCase):
 
     def test_image_embedding_integration_and_backward(self):
         attention = self.make_attention()
-        embedding = self.ImageEmbed((3, 8, 12), attention.cfg)
+        embedding_cfg = self.ViTConfig(
+            image_size=(8, 12), in_channels=3,
+            ebd_dim=attention.cfg.ebd_dim,
+            n_head=attention.cfg.n_head,
+            head_dim=attention.cfg.head_dim,
+            patch_size=attention.cfg.patch_size,
+            n_layer=attention.cfg.n_layer,
+            ffn_dim=attention.cfg.ffn_dim,
+            cls_num=attention.cfg.cls_num,
+        )
+        embedding = self.ImageEmbed(embedding_cfg)
         image = torch.randn(2, 3, 8, 12, requires_grad=True)
         output = attention(embedding(image))
         self.assertEqual(output.shape, (2, 7, 8))
