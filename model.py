@@ -15,9 +15,11 @@ class ViTConfig:
     n_layer: int
     ffn_dim: int
     cls_num: int
+    ffn_type: str = "gelu"
     dropout_img_ebd: float = 0.0
     dropout_att_weight: float = 0.0
     dropout_att_out: float = 0.0
+    dropout_ffn_inner: float = 0.0
     dropout_ffn_out: float = 0.0
     ffn_bias: bool = False
 
@@ -92,7 +94,7 @@ class MultiHeadSelfAttention(nn.Module):
         return self.dropout(out)
     
 class FFN(nn.Module):
-    """Apply SwiGLU independently to each token, then apply output dropout.
+    """Apply a configurable GELU MLP or SwiGLU FFN to each token.
 
     Input: (batch_size, seq_length + 1, ebd_dim).
     Output: (batch_size, seq_length + 1, ebd_dim).
@@ -101,16 +103,32 @@ class FFN(nn.Module):
     def __init__(self, cfg: ViTConfig):
         super().__init__()
         self.cfg = cfg
-        self.w1 = nn.Linear(cfg.ebd_dim, cfg.ffn_dim, bias = cfg.ffn_bias)
-        self.w2 = nn.Linear(cfg.ebd_dim, cfg.ffn_dim, bias = cfg.ffn_bias)
-        self.w3 = nn.Linear(cfg.ffn_dim, cfg.ebd_dim, bias = cfg.ffn_bias)
-        self.dropout_out = nn.Dropout(cfg.dropout_ffn_out)
+        self.ffn_type = cfg.ffn_type.lower()
+        if self.ffn_type not in {"gelu", "swiglu"}:
+            raise ValueError(
+                f"Unsupported ffn_type={cfg.ffn_type!r}; "
+                "expected 'gelu' or 'swiglu'."
+            )
+        if self.ffn_type == "swiglu":
+            self.w1 = nn.Linear(cfg.ebd_dim, cfg.ffn_dim, bias = cfg.ffn_bias)
+            self.w2 = nn.Linear(cfg.ebd_dim, cfg.ffn_dim, bias = cfg.ffn_bias)
+            self.w3 = nn.Linear(cfg.ffn_dim, cfg.ebd_dim, bias = cfg.ffn_bias)
+            self.dropout_out = nn.Dropout(cfg.dropout_ffn_out)
+
+        if self.ffn_type == "gelu":
+            self.w1 = nn.Linear(cfg.ebd_dim, cfg.ffn_dim, bias = cfg.ffn_bias)
+            self.w2 = nn.Linear(cfg.ffn_dim, cfg.ebd_dim, bias = cfg.ffn_bias)
+            self.dropout_inner = nn.Dropout(cfg.dropout_ffn_inner)
+            self.dropout_out = nn.Dropout(cfg.dropout_ffn_out)
 
     def forward(self, x: Tensor):    # x.shape = (B = batch_size, T = seq_length+1, C = ebd_dim)
-        return self.dropout_out(self.w3(F.silu(self.w1(x)) * self.w2(x)))
+        if self.ffn_type == "swiglu":
+            return self.dropout_out(self.w3(F.silu(self.w1(x)) * self.w2(x)))
+        if self.ffn_type == "gelu":
+            return self.dropout_out(self.w2(self.dropout_inner(F.gelu(self.w1(x)))))
 
 class TransformerBlock(nn.Module):
-    """Apply a pre-norm Transformer block with self-attention and SwiGLU.
+    """Apply a pre-norm Transformer block with configurable FFN.
 
     Input: (batch_size, seq_length + 1, ebd_dim).
     Output: (batch_size, seq_length + 1, ebd_dim).
@@ -139,11 +157,12 @@ class ClassifierHead(nn.Module):
     """
     def __init__(self, cfg: ViTConfig):
         super().__init__()
+        self.w1 = nn.Linear(cfg.ebd_dim, cfg.ebd_dim)
         self.out_proj = nn.Linear(cfg.ebd_dim, cfg.cls_num)
 
     def forward(self, x: Tensor) -> Tensor: # (batch_size, seq_length + 1, ebd_dim)
         x = x[:, 0, :]  # get cls token (batch_size, ebd_dim)
-        return self.out_proj(x) # (batch_size, cls_num)
+        return self.out_proj(torch.tanh(self.w1(x))) # (batch_size, cls_num)
 
 
 
