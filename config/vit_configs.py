@@ -20,6 +20,7 @@ def _make_config(
     image_size: tuple[int, int] = (224, 224),
     in_channels: int = 3,
     cls_num: int = 1000,
+    ffn_type: str = "gelu",
     dropout: float = 0.1,
 ) -> ViTConfig:
     """Build a project ``ViTConfig`` from an original ViT specification."""
@@ -36,9 +37,11 @@ def _make_config(
         n_layer=n_layer,
         ffn_dim=ffn_dim,
         cls_num=cls_num,
+        ffn_type=ffn_type,
         dropout_img_ebd=dropout,
         dropout_att_weight=0.0,
         dropout_att_out=dropout,
+        dropout_ffn_inner=dropout,
         dropout_ffn_out=dropout,
         ffn_bias=False,
     )
