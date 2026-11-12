@@ -1,4 +1,3 @@
-import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import argparse
@@ -14,8 +13,28 @@ datasets_set = {
     "imagenet_1k",
 }
 
-def get_data_loader(args: argparse.Namespace) -> DataLoader:
-    args.dataset = args.dataset.lower() 
+def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
+    """Build training and evaluation loaders with dataset-specific transforms.
+
+    Args:
+        args: Configuration containing dataset (MNIST, FashionMNIST, CIFAR10,
+            CIFAR100, or ImageNet-1K via imagenet1k/imagenet-1k/imagenet_1k),
+            data_path (parent dataset directory), image_size (output side
+            length), batch_size (training batch size), and num_workers.
+            The dataset name is converted to lowercase in place. Datasets
+            are downloaded as needed except ImageNet-1K, which must already
+            be available under data_path/dataset.
+
+    Returns:
+        A (train_loader, test_loader) tuple. Training uses augmentation,
+        shuffling, and drops the final incomplete batch. Evaluation uses
+        twice the training batch size, preserves order, and keeps all samples;
+        ImageNet-1K evaluation uses the validation split.
+
+    Raises:
+        ValueError: If the dataset name is unsupported.
+    """
+    args.dataset = args.dataset.lower()
 
     if args.dataset == "mnist":
         # MNIST: 60,000 train + 10,000 test, 28x28 grayscale, about 55 MB uncompressed.
@@ -24,8 +43,8 @@ def get_data_loader(args: argparse.Namespace) -> DataLoader:
         mnist_std = (0.5,)
 
         train_transform = transforms.Compose([
-            transforms.Resize(size = (args.image_size, args.image_size)),
-            transforms.RandomCrop(size=(args.image_size, args.image_size), padding=2),
+            transforms.RandomCrop(28, padding=2),
+            transforms.Resize(size=(args.image_size, args.image_size)),
             transforms.ToTensor(),
             transforms.Normalize(mean=mnist_mean, std=mnist_std),
         ])
@@ -46,7 +65,7 @@ def get_data_loader(args: argparse.Namespace) -> DataLoader:
             train = False,
             transform = test_transform,
             download = True
-        ) 
+        )
 
     elif args.dataset == "fashionmnist":
         # FashionMNIST: 60,000 train + 10,000 test, 28x28 grayscale, about 55 MB uncompressed.
@@ -55,8 +74,8 @@ def get_data_loader(args: argparse.Namespace) -> DataLoader:
         fashionmnist_std = (0.5,)
 
         train_transform = transforms.Compose([
+            transforms.RandomCrop(28, padding=2),
             transforms.Resize(size=(args.image_size, args.image_size)),
-            transforms.RandomCrop(size=(args.image_size, args.image_size), padding=2),
             transforms.ToTensor(),
             transforms.Normalize(mean=fashionmnist_mean, std=fashionmnist_std),
         ])
@@ -145,7 +164,7 @@ def get_data_loader(args: argparse.Namespace) -> DataLoader:
 
     elif args.dataset in {"imagenet1k", "imagenet-1k", "imagenet_1k"}:
         # ImageNet-1K: 1,281,167 train + 50,000 validation, 1,000 classes, about 150 GB on disk.
-        imagenet_root = os.path.join(args.data_path, args.dataset)
+        imagenet_root = os.path.join(args.data_path, "imagenet1k")
         imagenet_mean = (0.485, 0.456, 0.406)
         imagenet_std = (0.229, 0.224, 0.225)
 
@@ -190,7 +209,7 @@ def get_data_loader(args: argparse.Namespace) -> DataLoader:
         shuffle=False,
         num_workers=args.num_workers,
         drop_last=False,
-    ) 
+    )
 
     return train_loader, test_loader
 
