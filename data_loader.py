@@ -3,14 +3,6 @@ from torch.utils.data import DataLoader
 import argparse
 import os
 
-datasets_set = {
-    "mnist",
-    "fashionmnist",
-    "cifar10",
-    "cifar100",
-    "imagenet1k",
-}
-
 def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
     """Build training and evaluation loaders with dataset-specific transforms.
 
@@ -162,7 +154,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         )
 
     elif args.dataset in {"imagenet1k", "imagenet-1k", "imagenet_1k"}:
-        # ImageNet-1K: 1,281,167 train + 50,000 validation, 1,000 classes, about 150 GB on disk.
+        # Converted ImageNet-1K: train/ and val/ contain class subdirectories.
         imagenet_root = os.path.join(args.data_path, "imagenet1k")
         imagenet_mean = (0.485, 0.456, 0.406)
         imagenet_std = (0.229, 0.224, 0.225)
@@ -173,9 +165,8 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
             transforms.ToTensor(),
             transforms.Normalize(mean=imagenet_mean, std=imagenet_std),
         ])
-        train = datasets.ImageNet(
-            root=imagenet_root,
-            split="train",
+        train = datasets.ImageFolder(
+            root=os.path.join(imagenet_root, "train"),
             transform=train_transform,
         )
 
@@ -185,9 +176,8 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
             transforms.ToTensor(),
             transforms.Normalize(mean=imagenet_mean, std=imagenet_std),
         ])
-        test = datasets.ImageNet(
-            root=imagenet_root,
-            split="val",
+        test = datasets.ImageFolder(
+            root=os.path.join(imagenet_root, "val"),
             transform=test_transform,
         )
 

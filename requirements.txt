@@ -1,6 +1,13 @@
 # 南京大学 PyTorch 镜像（含 torch/torchvision 及全部 nvidia-* CUDA 依赖，均为本地托管）
 --index-url https://mirrors.nju.edu.cn/pytorch/whl/cu128
+# 其他通用 Python 包使用阿里云 PyPI 镜像
+--extra-index-url https://mirrors.aliyun.com/pypi/simple
 
 # Deep learning framework and vision datasets/transforms
 torch==2.11.0+cu128
 torchvision==0.26.0+cu128
+matplotlib
+
+# Dataset download and conversion
+modelscope
+pyarrow
