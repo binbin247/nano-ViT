@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beta2", type=float, default=0.999)
     parser.add_argument("--eps", type=float, default=1e-8)
     parser.add_argument("--num-epoch", type=int, default=10)
+    parser.add_argument("--grad-accum-steps", type=int, default=1, help="Number of microbatches to accumulate before each optimizer update")
     parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints", help="Directory for last.pt and best.pt")
     parser.add_argument("--output-dir", type=str, default=".", help="Directory for curves, metrics, and run arguments")
     parser.add_argument("--resume", type=str, default=None, help="Resume from a saved checkpoint")
@@ -214,19 +215,22 @@ def train_one_epoch(
     optimizer: torch.optim.AdamW,
     device: torch.device,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    grad_accum_steps: int = 1,
 ) -> float:
-    # 梯度归零 -> forward -> 计算 loss -> backward -> 更新权重
+    # 梯度归零 -> 多个 microbatch forward/backward -> 更新权重
 
     model.train()
     total_loss = 0.0
     total_samples = 0
+    window_samples = 0
+    num_microbatches = len(train_loader)
+    optimizer.zero_grad(set_to_none=True)
 
-    for imgs, labels in train_loader:
+    for micro_step, (imgs, labels) in enumerate(train_loader):
         # Tensor.to() returns a new tensor; assign it back to use the device copy.
         imgs = imgs.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        optimizer.zero_grad(set_to_none=True)
         with torch.autocast(
             device_type="cuda",
             dtype=torch.bfloat16,
@@ -235,14 +239,27 @@ def train_one_epoch(
             logits = model(imgs)
             loss = F.cross_entropy(input=logits, target=labels)
 
-        loss.backward()
-        optimizer.step()
-        if scheduler is not None:
-            scheduler.step()
-
         batch_size = labels.size(0)
+        # Backpropagate a sum so that, at the update boundary, dividing by the
+        # window's sample count produces the mean gradient for that window.
+        (loss * batch_size).backward()
         total_loss += loss.item() * batch_size
         total_samples += batch_size
+        window_samples += batch_size
+
+        is_update_boundary = (
+            (micro_step + 1) % grad_accum_steps == 0
+            or micro_step + 1 == num_microbatches
+        )
+        if is_update_boundary:
+            for parameter in model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.div_(window_samples)
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            window_samples = 0
 
     return total_loss / max(total_samples, 1)
 
@@ -333,6 +350,7 @@ def main() -> None :
     train_loader, val_loader = get_data_loader(args)
 
     steps_per_epoch = len(train_loader)
+    updates_per_epoch = math.ceil(steps_per_epoch / args.grad_accum_steps)
     resume_checkpoint = None
     if args.resume is not None:
         resume_checkpoint = torch.load(
@@ -343,11 +361,13 @@ def main() -> None :
 
     if resume_checkpoint is None:
         schedule_config = {
-            "total_steps": args.num_epoch * steps_per_epoch,
-            "warmup_steps": int(args.warmup_epochs * steps_per_epoch),
+            "total_steps": args.num_epoch * updates_per_epoch,
+            "warmup_steps": int(args.warmup_epochs * updates_per_epoch),
             "min_lr": args.min_lr,
             "base_lr": args.lr,
             "steps_per_epoch": steps_per_epoch,
+            "updates_per_epoch": updates_per_epoch,
+            "grad_accum_steps": args.grad_accum_steps,
         }
     else:
         schedule_config = resume_checkpoint["schedule_config"].copy()
@@ -358,6 +378,24 @@ def main() -> None :
                 "Cannot resume with a different number of steps per epoch: "
                 f"checkpoint={saved_steps_per_epoch}, current={steps_per_epoch}. "
                 "Keep the batch size and dataset split unchanged."
+            )
+        saved_grad_accum_steps = int(schedule_config.get("grad_accum_steps", 1))
+        if saved_grad_accum_steps != args.grad_accum_steps:
+            raise ValueError(
+                "Cannot resume with a different gradient accumulation setting: "
+                f"checkpoint={saved_grad_accum_steps}, current={args.grad_accum_steps}. "
+                "Keep --grad-accum-steps unchanged."
+            )
+        saved_updates_per_epoch = int(
+            schedule_config.get(
+                "updates_per_epoch",
+                math.ceil(saved_steps_per_epoch / saved_grad_accum_steps),
+            )
+        )
+        if saved_updates_per_epoch != updates_per_epoch:
+            raise ValueError(
+                "Cannot resume with a different number of optimizer updates per epoch: "
+                f"checkpoint={saved_updates_per_epoch}, current={updates_per_epoch}."
             )
 
     # prepare model
@@ -415,6 +453,7 @@ def main() -> None :
             optimizer=optimizer,
             device=device,
             scheduler=scheduler,
+            grad_accum_steps=args.grad_accum_steps,
         )
         eval_accuracy = evaluate(
             model = model,
