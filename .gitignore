@@ -10,3 +10,6 @@ checkpoints/
 *.log
 
 .cache/
+
+sync_from_server.sh
+sync_to_server.sh
