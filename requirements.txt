@@ -1,5 +1,5 @@
-# PyTorch official CUDA 12.8 package index
---index-url https://download.pytorch.org/whl/cu128
+# 南京大学 PyTorch 镜像（含 torch/torchvision 及全部 nvidia-* CUDA 依赖，均为本地托管）
+--index-url https://mirrors.nju.edu.cn/pytorch/whl/cu128
 
 # Deep learning framework and vision datasets/transforms
 torch==2.11.0+cu128
