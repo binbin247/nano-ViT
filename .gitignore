@@ -1,3 +1,5 @@
 __pycache__/
 *.py[cod]
 data/
+sync_to_server.sh
+sync_from_server.sh
