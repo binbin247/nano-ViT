@@ -80,6 +80,7 @@ def build_lr_scheduler(
     total_steps: int,
     warmup_steps: int,
     min_lr: float,
+    base_lr: float | None = None,
 ) -> torch.optim.lr_scheduler.LambdaLR:
     """Set the first update's LR, then advance warmup/cosine after each update.
 
@@ -87,7 +88,8 @@ def build_lr_scheduler(
     min_lr on the last update (when total_steps > 1).
     """
 
-    base_lr = optimizer.param_groups[0]["lr"]
+    if base_lr is None:
+        base_lr = optimizer.param_groups[0]["lr"]
     min_lr_ratio = min_lr / base_lr
     decay_start = max(warmup_steps - 1, 0)
     decay_steps = max(total_steps - 1 - decay_start, 1)
@@ -113,6 +115,7 @@ def save_checkpoint(
     eval_accuracies: list[float],
     learning_rates: list[float],
     best_accuracy: float,
+    schedule_config: dict[str, int | float],
     args: argparse.Namespace,
 ) -> None:
     """Save all state needed to resume a training run."""
@@ -130,10 +133,28 @@ def save_checkpoint(
             "eval_accuracies": eval_accuracies,
             "learning_rates": learning_rates,
             "best_accuracy": best_accuracy,
+            "schedule_config": schedule_config,
             "args": vars(args).copy(),
         },
         f = checkpoint_path,
     )
+
+
+def restore_checkpoint(
+    checkpoint: dict,
+    *,
+    model: ViT,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+) -> None:
+    """Restore model, optimizer, and scheduler from checkpoint data."""
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    scheduler_state = checkpoint.get("scheduler_state_dict")
+    if scheduler is not None and scheduler_state is not None:
+        scheduler.load_state_dict(scheduler_state)
 
 
 def load_checkpoint(
@@ -144,16 +165,15 @@ def load_checkpoint(
     scheduler: torch.optim.lr_scheduler.LRScheduler | None,
     device: torch.device,
 ) -> dict:
-    """Restore model and training state from a checkpoint created locally."""
+    """Load and restore a checkpoint created locally."""
 
     checkpoint = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-
-    scheduler_state = checkpoint.get("scheduler_state_dict")
-    if scheduler is not None and scheduler_state is not None:
-        scheduler.load_state_dict(scheduler_state)
-
+    restore_checkpoint(
+        checkpoint,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
     return checkpoint
 
 
@@ -312,6 +332,34 @@ def main() -> None :
     # prepare data loader
     train_loader, val_loader = get_data_loader(args)
 
+    steps_per_epoch = len(train_loader)
+    resume_checkpoint = None
+    if args.resume is not None:
+        resume_checkpoint = torch.load(
+            args.resume,
+            map_location=device,
+            weights_only=False,
+        )
+
+    if resume_checkpoint is None:
+        schedule_config = {
+            "total_steps": args.num_epoch * steps_per_epoch,
+            "warmup_steps": int(args.warmup_epochs * steps_per_epoch),
+            "min_lr": args.min_lr,
+            "base_lr": args.lr,
+            "steps_per_epoch": steps_per_epoch,
+        }
+    else:
+        schedule_config = resume_checkpoint["schedule_config"].copy()
+
+        saved_steps_per_epoch = int(schedule_config["steps_per_epoch"])
+        if saved_steps_per_epoch != steps_per_epoch:
+            raise ValueError(
+                "Cannot resume with a different number of steps per epoch: "
+                f"checkpoint={saved_steps_per_epoch}, current={steps_per_epoch}. "
+                "Keep the batch size and dataset split unchanged."
+            )
+
     # prepare model
     model = ViT(args).to(device)
 
@@ -325,9 +373,10 @@ def main() -> None :
     )
     scheduler = build_lr_scheduler(
         optimizer=optimizer,
-        total_steps=args.num_epoch * len(train_loader),
-        warmup_steps=int(args.warmup_epochs * len(train_loader)),
-        min_lr=args.min_lr,
+        total_steps=int(schedule_config["total_steps"]),
+        warmup_steps=int(schedule_config["warmup_steps"]),
+        min_lr=float(schedule_config["min_lr"]),
+        base_lr=float(schedule_config["base_lr"]),
     )
 
     train_losses: list[float] = []
@@ -336,20 +385,22 @@ def main() -> None :
     start_epoch = 1
     best_accuracy = -float("inf")
 
-    if args.resume is not None:
-        checkpoint = load_checkpoint(
-            args.resume,
+    if resume_checkpoint is not None:
+        restore_checkpoint(
+            resume_checkpoint,
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
-            device=device,
         )
-        start_epoch = checkpoint["epoch"] + 1
-        train_losses = checkpoint.get("train_losses", [])
-        eval_accuracies = checkpoint.get("eval_accuracies", [])
-        learning_rates = checkpoint.get("learning_rates", [])
-        best_accuracy = checkpoint.get("best_accuracy", -float("inf"))
-        print(f"Resumed from {args.resume} at epoch {checkpoint['epoch']}.")
+        start_epoch = resume_checkpoint["epoch"] + 1
+        train_losses = resume_checkpoint.get("train_losses", [])
+        eval_accuracies = resume_checkpoint.get("eval_accuracies", [])
+        learning_rates = resume_checkpoint.get("learning_rates", [])
+        best_accuracy = resume_checkpoint.get("best_accuracy", -float("inf"))
+        print(
+            f"Resumed from {args.resume} at epoch "
+            f"{resume_checkpoint['epoch']} using the saved scheduler."
+        )
 
     if start_epoch > args.num_epoch:
         raise ValueError(
@@ -394,6 +445,7 @@ def main() -> None :
             "eval_accuracies": eval_accuracies,
             "learning_rates": learning_rates,
             "best_accuracy": best_accuracy,
+            "schedule_config": schedule_config,
             "args": args,
         }
         save_checkpoint(

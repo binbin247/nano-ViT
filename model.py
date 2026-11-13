@@ -118,9 +118,9 @@ class TransformerBlock(nn.Module):
 
     def __init__(self, args: argparse.Namespace):
         super().__init__()
-        self.ln_mha = nn.LayerNorm(args.ebd_dim, eps = 1e-5)
+        self.ln_mha = nn.LayerNorm(args.ebd_dim, eps=1e-6)
         self.mha = MultiHeadSelfAttention(args)
-        self.ln_ffn = nn.LayerNorm(args.ebd_dim, eps = 1e-5)
+        self.ln_ffn = nn.LayerNorm(args.ebd_dim, eps=1e-6)
         self.ffn = FFN(args)
 
     def forward(self, x: Tensor) -> Tensor:  # x.shape = (B, T, C)
@@ -158,7 +158,7 @@ class ViT(nn.Module):
         super().__init__()
         self.img_ebd = ImageEmbed(args)
         self.encoder = nn.ModuleList([TransformerBlock(args) for _ in range(args.n_layer)])
-        self.ln_cls_head = nn.LayerNorm(args.ebd_dim)
+        self.ln_cls_head = nn.LayerNorm(args.ebd_dim, eps=1e-6)
         self.cls_head = ClassifierHead(args)
 
         # initialize all the weights
