@@ -9,8 +9,6 @@ datasets_set = {
     "cifar10",
     "cifar100",
     "imagenet1k",
-    "imagenet-1k",
-    "imagenet_1k",
 }
 
 def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
@@ -19,8 +17,9 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
     Args:
         args: Configuration containing dataset (MNIST, FashionMNIST, CIFAR10,
             CIFAR100, or ImageNet-1K via imagenet1k/imagenet-1k/imagenet_1k),
-            data_path (parent dataset directory), image_size (output side
-            length), batch_size (training batch size), and num_workers.
+            data_path (parent dataset directory), image_size (output
+            ``(height, width)``), batch_size (training batch size), and
+            num_workers.
             The dataset name is converted to lowercase in place. Datasets
             are downloaded as needed except ImageNet-1K, which must already
             be available under data_path/dataset.
@@ -44,7 +43,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
 
         train_transform = transforms.Compose([
             transforms.RandomCrop(28, padding=2),
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=mnist_mean, std=mnist_std),
         ])
@@ -56,7 +55,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         )
 
         test_transform = transforms.Compose([
-            transforms.Resize(size = (args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=mnist_mean, std=mnist_std),
         ])
@@ -75,7 +74,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
 
         train_transform = transforms.Compose([
             transforms.RandomCrop(28, padding=2),
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=fashionmnist_mean, std=fashionmnist_std),
         ])
@@ -87,7 +86,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         )
 
         test_transform = transforms.Compose([
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=fashionmnist_mean, std=fashionmnist_std),
         ])
@@ -107,7 +106,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         train_transform = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=cifar10_mean, std=cifar10_std),
         ])
@@ -119,7 +118,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         )
 
         test_transform = transforms.Compose([
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=cifar10_mean, std=cifar10_std),
         ])
@@ -139,7 +138,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         train_transform = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=cifar100_mean, std=cifar100_std),
         ])
@@ -151,7 +150,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         )
 
         test_transform = transforms.Compose([
-            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.Resize(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=cifar100_mean, std=cifar100_std),
         ])
@@ -181,7 +180,7 @@ def get_data_loader(args: argparse.Namespace) -> tuple[DataLoader, DataLoader]:
         )
 
         test_transform = transforms.Compose([
-            transforms.Resize(int(args.image_size * 256 / 224)),
+            transforms.Resize(args.image_size),
             transforms.CenterCrop(args.image_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=imagenet_mean, std=imagenet_std),
@@ -220,7 +219,7 @@ if __name__ == "__main__":
     args = argparse.Namespace(
         dataset="cifar10",
         data_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
-        image_size=32,
+        image_size=(32, 32),
         batch_size=64,
         num_workers=0,
     )
