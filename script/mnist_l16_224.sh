@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+# Data: MNIST | N_train=60k | N_test=10k | x:28²×1→224²×1 | classes=10
+# Model: ViT-L/16 | L=24 | D=1024 | heads=16 | P=16² | params≈303.94 M
+# Out: ./runs/mnist_l16_224/${RUN_ID}/{args.txt,metrics.json,training_curves.png,logs/,checkpoints/}
+
+set -euo pipefail
+
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+RUN_NAME="mnist_l16_224"
+RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
+RUN_DIR="./runs/${RUN_NAME}/${RUN_ID}"
+
+mkdir -p "${RUN_DIR}/checkpoints" "${RUN_DIR}/logs"
+
+train_args=(
+    # Data arguments
+    --dataset mnist \
+    --data-path ./data \
+    --image-size 224 \
+    --batch-size 128 \
+    --num-workers 4 \
+    --in-channels 1 \
+    --num-classes 10 \
+
+    # Training arguments
+    --device cuda:6 \
+    --seed 42 \
+    --lr 3e-4 \
+    --min-lr 1e-6 \
+    --warmup-epochs 5.0 \
+    --weight-decay 0.05 \
+    --beta1 0.9 \
+    --beta2 0.999 \
+    --eps 1e-8 \
+    --num-epoch 200 \
+
+    # ViT arguments: ViT-L/16
+    --ebd-dim 1024 \
+    --n-head 16 \
+    --head-dim 64 \
+    --patch-size 16 \
+    --n-layer 24 \
+    --ffn-dim 4096 \
+    --ffn-type gelu \
+    --dropout-img-ebd 0.1 \
+    --dropout-att-weight 0.0 \
+    --dropout-att-out 0.1 \
+    --dropout-ffn-inner 0.1 \
+    --dropout-ffn-out 0.1 \
+    --ffn-bias \
+
+    # Output arguments
+    --checkpoint-dir "${RUN_DIR}/checkpoints" \
+    --output-dir "${RUN_DIR}"
+)
+
+.venv/bin/python train.py "${train_args[@]}" \
+    2>&1 | tee "${RUN_DIR}/logs/train.log"

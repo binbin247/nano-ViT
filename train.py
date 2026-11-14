@@ -290,14 +290,11 @@ def plot_training_history(
     train_losses: list[float],
     eval_accuracies: list[float],
     output_path: str = "training_curves.png",
-    learning_rates: list[float] | None = None,
 ) -> None:
-    """Save loss, accuracy, and optional epoch-end learning rate curves."""
+    """Save training loss and evaluation accuracy curves."""
 
     if len(train_losses) != len(eval_accuracies):
         raise ValueError("train_losses and eval_accuracies must have the same length")
-    if learning_rates is not None and len(learning_rates) != len(train_losses):
-        raise ValueError("learning_rates must have the same length as train_losses")
     if not train_losses:
         return
 
@@ -305,31 +302,25 @@ def plot_training_history(
     import matplotlib.pyplot as plt
 
     epochs = range(1, len(train_losses) + 1)
-    num_plots = 3 if learning_rates is not None else 2
-    figure, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 4))
-    loss_axis, accuracy_axis = axes[:2]
+    figure, loss_axis = plt.subplots(figsize=(7, 6))
+    accuracy_axis = loss_axis.twinx()
 
-    loss_axis.plot(epochs, train_losses, marker="o")
-    loss_axis.set_title("Training loss")
+    loss_line, = loss_axis.plot(epochs, train_losses, color="blue", label="Training loss")
+    loss_axis.set_title("Training loss and evaluation accuracy")
     loss_axis.set_xlabel("Epoch")
     loss_axis.set_ylabel("Loss")
+    loss_axis.tick_params(axis="y", colors="blue")
     loss_axis.grid(True, alpha=0.3)
 
-    accuracy_axis.plot(epochs, eval_accuracies, marker="o")
-    accuracy_axis.set_title("Evaluation accuracy")
-    accuracy_axis.set_xlabel("Epoch")
+    accuracy_line, = accuracy_axis.plot(epochs, eval_accuracies, color="red", label="Evaluation accuracy")
     accuracy_axis.set_ylabel("Accuracy")
     accuracy_axis.set_ylim(0.0, 1.0)
-    accuracy_axis.grid(True, alpha=0.3)
+    accuracy_axis.tick_params(axis="y", colors="red")
 
-    if learning_rates is not None:
-        lr_axis = axes[2]
-        lr_axis.plot(epochs, learning_rates, marker="o")
-        lr_axis.set_title("Learning rate at epoch end")
-        lr_axis.set_xlabel("Epoch")
-        lr_axis.set_ylabel("Learning rate")
-        lr_axis.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
-        lr_axis.grid(True, alpha=0.3)
+    loss_axis.legend(
+        handles=[loss_line, accuracy_line],
+        loc="best",
+    )
 
     figure.tight_layout()
     figure.savefig(output_path, dpi=150)
@@ -501,7 +492,6 @@ def main() -> None :
     plot_training_history(
         train_losses=train_losses,
         eval_accuracies=eval_accuracies,
-        learning_rates=learning_rates,
         output_path=str(Path(args.output_dir) / "training_curves.png"),
     )
     save_training_metrics(
